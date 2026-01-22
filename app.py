@@ -28,6 +28,8 @@ st.markdown("""
         background-color: #f0f2f6; color: #444; font-size: 0.8em; 
         margin-right: 6px; border: 1px solid #ddd;
     }
+    /* 优化输入框旁边的按钮对齐 */
+    div[data-testid="column"] { align-self: flex-end; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -42,11 +44,10 @@ def is_target_file(href):
     return any(href.lower().endswith(ext) for ext in valid_exts) or 'download' in href.lower()
 
 def get_file_size_mb(url):
-    """用探针检测文件大小，不下载文件"""
     try:
         response = requests.head(url, verify=False, timeout=5)
         size_bytes = int(response.headers.get('Content-Length', 0))
-        return size_bytes / (1024 * 1024) # 转换为 MB
+        return size_bytes / (1024 * 1024)
     except:
         return 0
 
@@ -120,22 +121,40 @@ if st.session_state['found_files']:
     st.markdown('<div class="compact-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="step-header">Step 2. 选择与下载</div>', unsafe_allow_html=True)
     
-    # 智能选择器
+    # === 智能选择器 (优化版) ===
     with st.container():
+        # 初始化 session state 中的输入框值（如果不存在）
+        if 'batch_start' not in st.session_state: st.session_state.batch_start = 1
+        if 'batch_end' not in st.session_state: st.session_state.batch_end = min(len(st.session_state['found_files']), 30)
+
         c1, c2, c3, c4 = st.columns([1, 1, 1.5, 3])
-        with c1: start_id = st.number_input("起始 ID", min_value=1, value=1)
-        with c2: end_id = st.number_input("结束 ID", min_value=1, value=min(len(st.session_state['found_files']), 20))
+        
+        with c1: 
+            # 绑定 key 到 session state，实现重置功能
+            start_id = st.number_input("起始 ID", min_value=1, key="batch_start")
+        with c2: 
+            end_id = st.number_input("结束 ID", min_value=1, key="batch_end")
+            
         with c3:
-            st.write("")
-            st.write("") 
-            if st.button("✅ 勾选范围"):
+            # 按钮逻辑优化：覆盖式选择
+            if st.button("✅ 仅选中此范围", help="这会取消其他勾选，只选中当前范围"):
                 for f in st.session_state['found_files']:
-                    if start_id <= f['序号'] <= end_id: f['下载?'] = True
+                    # 关键逻辑：如果在范围内则 True，否则 False (实现覆盖)
+                    if start_id <= f['序号'] <= end_id:
+                        f['下载?'] = True
+                    else:
+                        f['下载?'] = False
+                st.toast(f"已选中 {start_id}-{end_id} (旧选择已清除)", icon="⚡")
+
         with c4:
-             st.write("")
-             st.write("")
-             if st.button("🗑️ 清空"):
+             # 重置逻辑优化：同时清空勾选 + 重置数字
+             if st.button("🗑️ 重置所有"):
+                 # 1. 清空表格勾选
                  for f in st.session_state['found_files']: f['下载?'] = False
+                 # 2. 重置输入框数字
+                 st.session_state.batch_start = 1
+                 st.session_state.batch_end = 1
+                 # 3. 强制刷新页面以显示变化
                  st.rerun()
 
     # 表格
@@ -176,10 +195,8 @@ if st.session_state['found_files']:
             with zipfile.ZipFile(zip_buffer, "w") as zf:
                 for i, item in enumerate(download_list):
                     try:
-                        # 1. 安全检查：先看大小
                         file_mb = get_file_size_mb(item['URL'])
                         
-                        # 【安全阀】如果大于 100MB，直接跳过
                         if file_mb > 100: 
                             status_text.warning(f"⚠️ 跳过大文件 ({file_mb:.1f}MB): {item['原始文件名']}")
                             error_log.append(f"跳过(太大): {item['原始文件名']}")
