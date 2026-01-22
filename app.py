@@ -49,6 +49,41 @@ def get_file_size_mb(url):
     except:
         return 0
 
+# ==========================================
+# 🧠 核心回调：原地修改内存对象 (In-Place Mutation)
+# ==========================================
+
+def handle_editor_change():
+    """当表格被修改时触发"""
+    # 获取修改记录
+    changes = st.session_state.editor_key.get("edited_rows", {})
+    
+    if changes:
+        # 直接修改 session_state 中的 DataFrame 对象，不创建新的
+        # 这样 Streamlit 会认为对象 ID 没变，从而尽可能保留前端状态
+        for idx, row_changes in changes.items():
+            if "下载?" in row_changes:
+                st.session_state.main_df.at[int(idx), "下载?"] = row_changes["下载?"]
+        
+        # 同步更新输入框的数字
+        selected = st.session_state.main_df[st.session_state.main_df["下载?"]]
+        if not selected.empty:
+            st.session_state.batch_start = int(selected["序号"].min())
+            st.session_state.batch_end = int(selected["序号"].max())
+
+def apply_range_btn():
+    """按钮点击：仅选中范围"""
+    start = st.session_state.batch_start
+    end = st.session_state.batch_end
+    # 向量化原地更新
+    st.session_state.main_df["下载?"] = st.session_state.main_df["序号"].between(start, end)
+
+def apply_reset_btn():
+    """按钮点击：重置"""
+    st.session_state.main_df["下载?"] = False
+    st.session_state.batch_start = 1
+    st.session_state.batch_end = 1
+
 # --- 主界面 ---
 st.title("🕵️ OSINT 云端批量下载器")
 
@@ -56,50 +91,14 @@ st.markdown("""
     <div style="margin-bottom: 10px;">
         <span class="feature-tag">🛡️ 智能防崩溃</span>
         <span class="feature-tag">🔄 完美双向同步</span>
-        <span class="feature-tag">⚓ 滚动条绝对锁定</span>
+        <span class="feature-tag">⚓ 内存级防抖动</span>
     </div>
     <div class="compact-divider"></div> 
 """, unsafe_allow_html=True)
 
-if 'found_files' not in st.session_state: st.session_state['found_files'] = []
-
-# ==========================================
-# 🧠 核心逻辑：在渲染 UI 之前处理数据交互
-# ==========================================
-
-# 1. 检查表格是否有手动更新 (从 session_state.editor 读取)
-if "editor" in st.session_state:
-    edited_rows = st.session_state.editor.get("edited_rows", {})
-    # 如果有修改，立即同步到 source of truth
-    if edited_rows:
-        for idx, changes in edited_rows.items():
-            if "下载?" in changes:
-                st.session_state['found_files'][int(idx)]['下载?'] = changes["下载?"]
-        
-        # 立即计算新的范围，更新 session_state 中的 batch_start/end
-        # 这样等下渲染输入框时，数字就是对的！
-        selected = [f for f in st.session_state['found_files'] if f['下载?']]
-        if selected:
-            nums = [f['序号'] for f in selected]
-            st.session_state.batch_start = min(nums)
-            st.session_state.batch_end = max(nums)
-
-# 2. 按钮回调函数 (保持不变，用于批量操作)
-def apply_range_select():
-    start = st.session_state.batch_start
-    end = st.session_state.batch_end
-    for f in st.session_state['found_files']:
-        if start <= f['序号'] <= end:
-            f['下载?'] = True
-        else:
-            f['下载?'] = False
-
-def apply_reset():
-    for f in st.session_state['found_files']:
-        f['下载?'] = False
-    st.session_state.batch_start = 1
-    st.session_state.batch_end = 1
-
+# 确保 main_df 存在且持久
+if 'main_df' not in st.session_state:
+    st.session_state.main_df = pd.DataFrame()
 
 # --- Step 1 ---
 st.markdown('<div class="step-header">Step 1. 扫描文件列表</div>', unsafe_allow_html=True)
@@ -146,43 +145,43 @@ if start_scan:
                             "URL": full_url
                         })
                 
-                st.session_state['found_files'] = files
+                # 初始化/覆盖 main_df
+                st.session_state.main_df = pd.DataFrame(files)
                 st.toast(f"扫描完成！发现 {len(files)} 个文件。", icon="✅")
-                # 扫描后如果有Editor状态残留，可以清理一下，但这不重要
                 
         except Exception as e:
             st.error(f"扫描失败: {e}")
 
 # --- Step 2 ---
-if st.session_state['found_files']:
+if not st.session_state.main_df.empty:
     st.markdown('<div class="compact-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="step-header">Step 2. 选择与下载</div>', unsafe_allow_html=True)
     
     # === 智能选择器 ===
     with st.container():
         if 'batch_start' not in st.session_state: st.session_state.batch_start = 1
-        if 'batch_end' not in st.session_state: st.session_state.batch_end = min(len(st.session_state['found_files']), 30)
+        # 动态计算最大值，防止索引越界
+        max_val = len(st.session_state.main_df)
+        if 'batch_end' not in st.session_state: st.session_state.batch_end = min(max_val, 30)
 
         c1, c2, c3, c4 = st.columns([1, 1, 1.5, 3], vertical_alignment="bottom")
         
         with c1: 
-            # 这里的 batch_start 已经在上面的预处理逻辑中更新过了！
             st.number_input("起始 ID", min_value=1, key="batch_start")
         with c2: 
             st.number_input("结束 ID", min_value=1, key="batch_end")
             
         with c3:
-            st.button("✅ 仅选中此范围", on_click=apply_range_select, help="取消其他，只选当前")
+            st.button("✅ 仅选中此范围", on_click=apply_range_btn, help="取消其他，只选当前")
 
         with c4:
-             st.button("🗑️ 重置所有", on_click=apply_reset)
+             st.button("🗑️ 重置所有", on_click=apply_reset_btn)
 
     # === 表格区域 ===
-    # 将 session state 转为 DF 用于显示
-    df_display = pd.DataFrame(st.session_state['found_files'])
+    # 核心：直接传入 session_state.main_df 对象，不要在外面做任何切片或处理
     
     edited_df = st.data_editor(
-        df_display,
+        st.session_state.main_df,
         column_config={
             "下载?": st.column_config.CheckboxColumn("选?", width="small"),
             "序号": st.column_config.NumberColumn("No.", width="small", format="%d"),
@@ -192,13 +191,13 @@ if st.session_state['found_files']:
         hide_index=True,
         use_container_width=True,
         height=400,
-        key="editor" 
-        # 注意：这里去掉了所有 on_change，让 Streamlit 自然处理
+        key="editor_key", # 使用固定 Key
+        on_change=handle_editor_change # 回调处理同步
     )
     
     # --- 下载区域 ---
-    # 直接使用 found_files (source of truth)
-    selected_rows = [f for f in st.session_state['found_files'] if f['下载?']]
+    # 过滤出需要下载的
+    selected_rows = st.session_state.main_df[st.session_state.main_df["下载?"]]
     count = len(selected_rows)
     
     st.info(f"当前选中: {count} 个文件")
@@ -213,7 +212,7 @@ if st.session_state['found_files']:
             status_text = st.empty()
             error_log = []
             
-            download_list = selected_rows
+            download_list = selected_rows.to_dict('records')
             total = len(download_list)
             success_count = 0
             
