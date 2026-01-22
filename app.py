@@ -49,11 +49,45 @@ def get_file_size_mb(url):
     except:
         return 0
 
-# 回调：重置逻辑
-def reset_callback():
-    if 'found_files' in st.session_state:
-        for f in st.session_state['found_files']:
+# === 核心回调函数群 (解决报错的关键) ===
+
+def sync_from_table():
+    """当表格被手动修改时，反向更新输入框"""
+    # 1. 获取表格的修改记录
+    edited_rows = st.session_state.editor.get("edited_rows", {})
+    
+    # 2. 将修改应用到源数据 (Source of Truth)
+    for idx, changes in edited_rows.items():
+        if "下载?" in changes:
+            # 注意：idx 是行号，对应 found_files 的索引
+            st.session_state['found_files'][int(idx)]['下载?'] = changes["下载?"]
+    
+    # 3. 计算新的选中范围，并更新输入框
+    # (因为是在回调中更新，下次页面渲染时输入框就会自动变，不会报错)
+    selected_indices = [f['序号'] for f in st.session_state['found_files'] if f['下载?']]
+    if selected_indices:
+        st.session_state.batch_start = int(min(selected_indices))
+        st.session_state.batch_end = int(max(selected_indices))
+
+def apply_range_selection():
+    """当点击'仅选中此范围'按钮时"""
+    start = st.session_state.batch_start
+    end = st.session_state.batch_end
+    
+    # 更新源数据
+    for f in st.session_state['found_files']:
+        if start <= f['序号'] <= end:
+            f['下载?'] = True
+        else:
             f['下载?'] = False
+            
+    # 重要：为了防止冲突，这里不强制清空 editor 状态，
+    # 而是依赖页面重绘时 data_editor 读取最新的 found_files
+
+def reset_all():
+    """重置所有"""
+    for f in st.session_state['found_files']:
+        f['下载?'] = False
     st.session_state.batch_start = 1
     st.session_state.batch_end = 1
 
@@ -64,7 +98,7 @@ st.markdown("""
     <div style="margin-bottom: 10px;">
         <span class="feature-tag">🛡️ 智能防崩溃 (自动跳过大文件)</span>
         <span class="feature-tag">📂 支持多种格式</span>
-        <span class="feature-tag">🔄 双向同步选择</span>
+        <span class="feature-tag">🔄 双向同步 (无报错版)</span>
     </div>
     <div class="compact-divider"></div> 
 """, unsafe_allow_html=True)
@@ -129,33 +163,28 @@ if st.session_state['found_files']:
     
     # === 智能选择器 ===
     with st.container():
-        # 确保 session state 初始化
         if 'batch_start' not in st.session_state: st.session_state.batch_start = 1
         if 'batch_end' not in st.session_state: st.session_state.batch_end = min(len(st.session_state['found_files']), 30)
 
         c1, c2, c3, c4 = st.columns([1, 1, 1.5, 3], vertical_alignment="bottom")
         
         with c1: 
-            start_id = st.number_input("起始 ID", min_value=1, key="batch_start")
+            st.number_input("起始 ID", min_value=1, key="batch_start")
         with c2: 
-            end_id = st.number_input("结束 ID", min_value=1, key="batch_end")
+            st.number_input("结束 ID", min_value=1, key="batch_end")
             
         with c3:
-            if st.button("✅ 仅选中此范围", help="取消其他，只选当前"):
-                for f in st.session_state['found_files']:
-                    if start_id <= f['序号'] <= end_id:
-                        f['下载?'] = True
-                    else:
-                        f['下载?'] = False
-                st.toast(f"已选中 {start_id}-{end_id}", icon="⚡")
+            # 绑定回调：点击按钮时执行 apply_range_selection
+            st.button("✅ 仅选中此范围", on_click=apply_range_selection, help="取消其他，只选当前")
 
         with c4:
-             st.button("🗑️ 重置所有", on_click=reset_callback)
+             # 绑定回调：点击按钮时执行 reset_all
+             st.button("🗑️ 重置所有", on_click=reset_all)
 
     # === 表格区域 ===
     df = pd.DataFrame(st.session_state['found_files'])
     
-    # 核心修改：接收表格的即时修改
+    # 核心修改：绑定 on_change 回调
     edited_df = st.data_editor(
         df,
         column_config={
@@ -167,27 +196,12 @@ if st.session_state['found_files']:
         hide_index=True,
         use_container_width=True,
         height=400,
-        key="editor"
+        key="editor",              # 必须设置 key
+        on_change=sync_from_table  # <--- 关键：所有修改都在回调中处理
     )
     
-    # --- 🔄 双向同步逻辑 (Magic Happens Here) ---
-    # 1. 立即把表格的手动修改存回 Session State
-    st.session_state['found_files'] = edited_df.to_dict('records')
-    
-    # 2. 检查是否有选中项，并反向更新输入框
-    selected_indices = [f['序号'] for f in st.session_state['found_files'] if f['下载?']]
-    
-    if selected_indices:
-        real_min = min(selected_indices)
-        real_max = max(selected_indices)
-        
-        # 3. 如果发现输入框的数字和实际勾选的不一样，强制刷新输入框
-        if real_min != st.session_state.batch_start or real_max != st.session_state.batch_end:
-            st.session_state.batch_start = int(real_min)
-            st.session_state.batch_end = int(real_max)
-            st.rerun() # 🚀 触发刷新，让您看到输入框数字自动变了！
-
     # --- 下载区域 ---
+    # 直接从 session state 读取最新状态 (因为回调已经更新了它)
     selected_rows = [f for f in st.session_state['found_files'] if f['下载?']]
     count = len(selected_rows)
     
