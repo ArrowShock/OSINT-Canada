@@ -15,20 +15,49 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # --- 页面配置 ---
 st.set_page_config(page_title="OSINT 云端批量下载器", layout="wide", page_icon="🕵️")
 
-# --- CSS 美化 ---
+# --- 🎨 CSS 终极美化 (紧凑版) ---
 st.markdown("""
     <style>
-    .stButton>button { width: 100%; min-height: 50px; font-size: 16px; font-weight: 600; }
+    /* 1. 顶部留白切除术：大幅减少页面顶部的空白 */
+    .block-container {
+        padding-top: 2rem !important;
+        padding-bottom: 1rem !important;
+    }
+    
+    /* 2. 标题与Tag优化 */
+    h1 {
+        margin-bottom: 0.5rem !important;
+    }
+    
+    /* 3. 自定义分割线 (替代占地方的 ---) */
+    .compact-divider {
+        border-top: 1px solid #e6e6e6;
+        margin-top: 10px;
+        margin-bottom: 15px;
+    }
+    
+    /* 4. 统一 Step 标题样式 */
+    .step-header {
+        font-size: 22px;
+        font-weight: 700;
+        color: #0f52ba; /* 专业的科技蓝 */
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+    }
+    
+    /* 5. 按钮样式微调 */
+    .stButton>button { 
+        width: 100%; 
+        border-radius: 8px;
+        font-weight: bold;
+    }
+    
+    /* Feature Tag 样式 */
     .feature-tag { 
-        display: inline-block; 
-        padding: 4px 12px; 
-        border-radius: 20px; 
-        background-color: #f0f2f6; 
-        color: #31333F; 
-        font-size: 0.85em; 
-        margin-right: 8px; 
-        margin-bottom: 8px;
-        border: 1px solid #d6d6d8;
+        display: inline-block; padding: 3px 10px; border-radius: 15px; 
+        background-color: #f0f2f6; color: #444; font-size: 0.8em; 
+        margin-right: 6px; border: 1px solid #ddd;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -44,32 +73,41 @@ def is_target_file(href):
     return any(href.lower().endswith(ext) for ext in valid_exts) or 'download' in href.lower()
 
 # --- 主界面 ---
+
+# 1. 标题区
 st.title("🕵️ OSINT 云端批量下载器")
 
-# 功能 Highlights
+# Feature Highlights
 st.markdown("""
-    <span class="feature-tag">✨ 无需安装 Python</span>
-    <span class="feature-tag">📂 支持 PDF/Excel/Word 等多种格式</span>
-    <span class="feature-tag">📊 表格级筛选 & 排序</span>
-    <span class="feature-tag">🚀 专为 OSINT 长期追踪设计</span>
-""", unsafe_allow_html=True)
-
-st.caption("输入网址 -> 智能扫描 -> 像 Excel 一样勾选需要的文件 (支持增量下载) -> 一键打包")
-st.markdown("---")
-
-target_url = st.text_input("🔗 输入目标网址:", placeholder="https://...")
+    <div style="margin-bottom: 10px;">
+        <span class="feature-tag">✨ 无需安装 Python</span>
+        <span class="feature-tag">📂 支持多种格式</span>
+        <span class="feature-tag">🔢 ID 智能区间选择</span>
+        <span class="feature-tag">🚀 专为 OSINT 设计</span>
+    </div>
+    <div class="compact-divider"></div> 
+""", unsafe_allow_html=True) # 使用自定义紧凑分割线
 
 # 初始化 Session State
 if 'found_files' not in st.session_state: st.session_state['found_files'] = []
-if 'select_all' not in st.session_state: st.session_state['select_all'] = False 
 
-# --- 1. 扫描逻辑 ---
-if st.button("🔍 1. 扫描文件列表"):
+# --- Step 1 区块 ---
+# 使用 Markdown 模拟统一的标题样式
+st.markdown('<div class="step-header">Step 1. 扫描文件列表</div>', unsafe_allow_html=True)
+
+col_input, col_btn = st.columns([3, 1])
+with col_input:
+    target_url = st.text_input("URL", placeholder="在此粘贴目标网址 (例如 https://...)", label_visibility="collapsed")
+with col_btn:
+    # 按钮文字现在只负责动作，不负责显示步骤，看起来更清爽
+    start_scan = st.button("🚀 开始扫描", use_container_width=True)
+
+if start_scan:
     if not target_url:
         st.warning("请先输入网址！")
     else:
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            headers = {"User-Agent": "Mozilla/5.0"}
             with st.spinner("正在云端扫描..."):
                 response = requests.get(target_url, headers=headers, verify=False)
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -93,7 +131,8 @@ if st.button("🔍 1. 扫描文件列表"):
                         display_name = link_text if len(link_text) > 3 else raw_name
                         
                         files.append({
-                            "下载?": False, # 默认初始状态
+                            "下载?": False,
+                            "序号": len(files) + 1,
                             "文件名": display_name,
                             "类型": get_ext(raw_name).upper().replace(".", ""),
                             "原始文件名": raw_name,
@@ -101,67 +140,67 @@ if st.button("🔍 1. 扫描文件列表"):
                         })
                 
                 st.session_state['found_files'] = files
-                st.session_state['select_all'] = False # 重置全选状态
-                st.success(f"扫描完成！发现 {len(files)} 个文件。")
+                st.toast(f"扫描完成！发现 {len(files)} 个文件。", icon="✅")
                 
         except Exception as e:
             st.error(f"扫描失败: {e}")
 
-# --- 2. 表格操作区 ---
+# --- Step 2 区块 ---
 if st.session_state['found_files']:
-    st.markdown("---")
-    st.subheader("2️⃣ 选择与下载")
+    # 再次使用紧凑分割线
+    st.markdown('<div class="compact-divider"></div>', unsafe_allow_html=True)
     
-    # 转换数据为 DataFrame
+    # Step 2 标题，与 Step 1 保持严格一致
+    st.markdown('<div class="step-header">Step 2. 选择与下载</div>', unsafe_allow_html=True)
+    
+    # === 智能选择器 ===
+    with st.container():
+        c1, c2, c3, c4 = st.columns([1, 1, 1.5, 3])
+        with c1:
+            start_id = st.number_input("起始 ID", min_value=1, value=1)
+        with c2:
+            end_id = st.number_input("结束 ID", min_value=1, value=min(len(st.session_state['found_files']), 20))
+        with c3:
+            st.write("") 
+            st.write("")
+            if st.button("✅ 勾选此范围"):
+                for f in st.session_state['found_files']:
+                    if start_id <= f['序号'] <= end_id:
+                        f['下载?'] = True
+                st.toast(f"已勾选 {start_id}-{end_id}", icon="⚡")
+
+        with c4:
+             st.write("")
+             st.write("")
+             if st.button("🗑️ 清空所有"):
+                 for f in st.session_state['found_files']:
+                     f['下载?'] = False
+                 st.rerun()
+
+    # === 表格 ===
     df = pd.DataFrame(st.session_state['found_files'])
     
-    # --- 全选/全不选 按钮逻辑 ---
-    col_btn, col_info = st.columns([1, 4])
-    with col_btn:
-        # 这是一个切换按钮
-        if st.button("✅ 全选 / ⬜ 全不选"):
-            st.session_state['select_all'] = not st.session_state['select_all']
-    
-    # 根据按钮状态，强制更新 DataFrame 的勾选状态
-    if st.session_state['select_all']:
-        df["下载?"] = True
-    else:
-        # 注意：这里我们不强制设为 False，否则用户手动勾选的会被冲掉
-        # 只有在刚点击“全不选”的那一瞬间可能需要重置，但在 Streamlit 里
-        # 最简单的逻辑是：如果用户想全选，点按钮；如果想微调，直接在表格里点。
-        # 为了方便，这里设定：点击按钮 -> 变为全选；再点 -> 变为全选取消（回到初始表格）
-        pass
-
-    # 如果是“全选”模式，覆盖数据；否则使用 data_editor 的默认编辑能力
-    if st.session_state['select_all']:
-        df["下载?"] = True
-        
-    # 显示表格
     edited_df = st.data_editor(
         df,
         column_config={
-            "下载?": st.column_config.CheckboxColumn("下载?", width="small"),
+            "下载?": st.column_config.CheckboxColumn("选?", width="small"),
+            "序号": st.column_config.NumberColumn("No.", width="small", format="%d"),
             "URL": st.column_config.LinkColumn("链接"),
         },
-        disabled=["文件名", "类型", "原始文件名", "URL"],
+        disabled=["序号", "文件名", "类型", "原始文件名", "URL"],
         hide_index=True,
         use_container_width=True,
         height=400,
-        key="editor" # 赋予唯一 key
+        key="editor"
     )
     
-    # 统计选中项
     selected_rows = edited_df[edited_df["下载?"] == True]
     count = len(selected_rows)
     
-    with col_info:
-        if st.session_state['select_all']:
-            st.info(f"⚡ 已启用全选模式。当前选中: {count} 个文件")
-        else:
-            st.info(f"当前选中: {count} 个文件 (点击左侧按钮可一键全选)")
+    st.info(f"当前选中: {count} 个文件")
 
-    # 3. 下载按钮
-    if st.button(f"📦 开始打包下载 ({count} 个文件)"):
+    # 下载按钮
+    if st.button(f"📦 开始打包下载 ({count} 个文件)", type="primary"):
         if count == 0:
             st.warning("⚠️ 请至少勾选一个文件！")
         else:
@@ -177,7 +216,7 @@ if st.session_state['found_files']:
             with zipfile.ZipFile(zip_buffer, "w") as zf:
                 for i, item in enumerate(download_list):
                     try:
-                        status_text.text(f"正在下载 ({i+1}/{total}): {item['原始文件名']}...")
+                        status_text.text(f"正在下载... ({i+1}/{total}) {item['原始文件名']}")
                         r = requests.get(item['URL'], headers=headers, verify=False, timeout=60)
                         zf.writestr(item['原始文件名'], r.content)
                         success_count += 1
@@ -186,13 +225,13 @@ if st.session_state['found_files']:
                         pass
                     progress_bar.progress((i + 1) / total)
             
-            status_text.text("✅ 打包完成！")
+            status_text.empty()
             progress_bar.empty()
             
             st.download_button(
                 label=f"🚀 下载 ZIP 包 ({success_count} 个文件)",
                 data=zip_buffer.getvalue(),
-                file_name="OSINT_Files.zip",
+                file_name=f"OSINT_Files_{int(time.time())}.zip",
                 mime="application/zip",
                 type="primary"
             )
