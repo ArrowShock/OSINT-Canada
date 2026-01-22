@@ -49,35 +49,47 @@ def get_file_size_mb(url):
     except:
         return 0
 
-# --- 核心逻辑函数 ---
-def update_source_data(files):
-    """更新源数据并缓存 DataFrame，防止不必要的重绘"""
-    st.session_state['found_files'] = files
-    # 关键：生成固定的 DataFrame 对象，除非显式更新，否则不变
-    st.session_state['cached_df'] = pd.DataFrame(files)
+# === 🌟 核心回调系统 (V17 稳定性引擎) ===
 
-def apply_range_selection():
-    """按钮回调：更新范围"""
+def init_df_view(files):
+    """初始化或重置 DataFrame 视图"""
+    # 我们将 DataFrame 存储在 session_state 中，保持对象 ID 不变
+    st.session_state.df_view = pd.DataFrame(files)
+
+def on_editor_change():
+    """
+    当用户手动勾选表格时触发。
+    使用原地更新 (In-place Update) 技术，防止滚动条跳动。
+    """
+    edited_rows = st.session_state.editor.get("edited_rows", {})
+    
+    # 1. 更新 DataFrame (直接修改 session_state 中的对象)
+    for idx, changes in edited_rows.items():
+        if "下载?" in changes:
+            # 使用 .at 进行极速原地修改
+            st.session_state.df_view.at[int(idx), "下载?"] = changes["下载?"]
+    
+    # 2. 反向同步：计算新的选中范围，更新输入框
+    # 直接读取 df_view 的最新状态
+    selected = st.session_state.df_view[st.session_state.df_view["下载?"] == True]
+    if not selected.empty:
+        # 更新输入框绑定的 session_state 变量
+        st.session_state.batch_start = int(selected["序号"].min())
+        st.session_state.batch_end = int(selected["序号"].max())
+
+def on_range_select():
+    """当点击'仅选中此范围'按钮时触发"""
     start = st.session_state.batch_start
     end = st.session_state.batch_end
     
-    # 只有点击按钮时，我们才修改源数据
-    for f in st.session_state['found_files']:
-        if start <= f['序号'] <= end:
-            f['下载?'] = True
-        else:
-            f['下载?'] = False
-    
-    # 更新缓存
-    update_source_data(st.session_state['found_files'])
+    # 向量化更新：比 for 循环快 100 倍，且直接作用于 df_view
+    st.session_state.df_view["下载?"] = st.session_state.df_view["序号"].between(start, end)
 
-def reset_all():
-    """按钮回调：重置"""
-    for f in st.session_state['found_files']:
-        f['下载?'] = False
+def on_reset():
+    """当点击'重置'按钮时触发"""
+    st.session_state.df_view["下载?"] = False
     st.session_state.batch_start = 1
     st.session_state.batch_end = 1
-    update_source_data(st.session_state['found_files'])
 
 # --- 主界面 ---
 st.title("🕵️ OSINT 云端批量下载器")
@@ -85,14 +97,15 @@ st.title("🕵️ OSINT 云端批量下载器")
 st.markdown("""
     <div style="margin-bottom: 10px;">
         <span class="feature-tag">🛡️ 智能防崩溃</span>
-        <span class="feature-tag">🔄 双向同步</span>
-        <span class="feature-tag">⚓ 滚动条防跳动版</span>
+        <span class="feature-tag">🔄 双向同步无报错</span>
+        <span class="feature-tag">⚓ 滚动条锁定技术</span>
     </div>
     <div class="compact-divider"></div> 
 """, unsafe_allow_html=True)
 
 if 'found_files' not in st.session_state: st.session_state['found_files'] = []
-if 'cached_df' not in st.session_state: st.session_state['cached_df'] = pd.DataFrame()
+# 确保 df_view 存在
+if 'df_view' not in st.session_state: st.session_state.df_view = pd.DataFrame()
 
 # --- Step 1 ---
 st.markdown('<div class="step-header">Step 1. 扫描文件列表</div>', unsafe_allow_html=True)
@@ -139,14 +152,16 @@ if start_scan:
                             "URL": full_url
                         })
                 
-                update_source_data(files)
+                st.session_state['found_files'] = files
+                # 初始化 DataFrame 视图
+                init_df_view(files)
                 st.toast(f"扫描完成！发现 {len(files)} 个文件。", icon="✅")
                 
         except Exception as e:
             st.error(f"扫描失败: {e}")
 
 # --- Step 2 ---
-if not st.session_state['cached_df'].empty:
+if not st.session_state.df_view.empty:
     st.markdown('<div class="compact-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="step-header">Step 2. 选择与下载</div>', unsafe_allow_html=True)
     
@@ -163,17 +178,19 @@ if not st.session_state['cached_df'].empty:
             st.number_input("结束 ID", min_value=1, key="batch_end")
             
         with c3:
-            st.button("✅ 仅选中此范围", on_click=apply_range_selection, help="取消其他，只选当前")
+            # 绑定 on_range_select 回调
+            st.button("✅ 仅选中此范围", on_click=on_range_select, help="取消其他，只选当前")
 
         with c4:
-             st.button("🗑️ 重置所有", on_click=reset_all)
+             # 绑定 on_reset 回调
+             st.button("🗑️ 重置所有", on_click=on_reset)
 
-    # === 表格区域 (防跳动核心) ===
-    # 我们不再在每次刷新时生成新的 DataFrame，而是使用 session_state 中的缓存
-    # 这样 data_editor 会认为数据源没变，从而尽可能保持滚动位置
+    # === 表格区域 (稳定性核心) ===
+    # 我们直接传入 session_state.df_view
+    # 因为对象 ID 没变，Streamlit 会认为"表格主体没变"，因此不会重置滚动条！
     
     edited_df = st.data_editor(
-        st.session_state['cached_df'], # <--- 使用固定缓存
+        st.session_state.df_view,
         column_config={
             "下载?": st.column_config.CheckboxColumn("选?", width="small"),
             "序号": st.column_config.NumberColumn("No.", width="small", format="%d"),
@@ -183,29 +200,13 @@ if not st.session_state['cached_df'].empty:
         hide_index=True,
         use_container_width=True,
         height=400,
-        key="editor" 
-        # 注意：这里去掉了 on_change 回调，防止手动勾选时因为数据源更新导致的跳动
+        key="editor",
+        on_change=on_editor_change # <--- 启用回调，实现双向同步
     )
     
-    # === 同步逻辑 (Manual Sync) ===
-    # 虽然去掉了回调，但我们依然需要读取表格的最新状态来更新输入框
-    # 我们在主流程里计算，如果发现输入框需要更新，再触发 rerun
-    
-    selected_indices = edited_df[edited_df["下载?"] == True]["序号"].tolist()
-    
-    if selected_indices:
-        real_min = int(min(selected_indices))
-        real_max = int(max(selected_indices))
-        
-        # 只有当数字真的需要变的时候，才触发刷新
-        if real_min != st.session_state.batch_start or real_max != st.session_state.batch_end:
-            st.session_state.batch_start = real_min
-            st.session_state.batch_end = real_max
-            st.rerun() 
-
     # --- 下载区域 ---
-    # 下载时直接使用 edited_df，它是用户当前看到的最新状态（包含手动勾选）
-    selected_rows = edited_df[edited_df["下载?"] == True]
+    # 从 df_view 中提取选中的行
+    selected_rows = st.session_state.df_view[st.session_state.df_view["下载?"] == True]
     count = len(selected_rows)
     
     st.info(f"当前选中: {count} 个文件")
@@ -220,6 +221,7 @@ if not st.session_state['cached_df'].empty:
             status_text = st.empty()
             error_log = []
             
+            # Pandas DF 转字典列表
             download_list = selected_rows.to_dict('records')
             total = len(download_list)
             success_count = 0
