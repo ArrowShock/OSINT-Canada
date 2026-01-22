@@ -49,6 +49,17 @@ def get_file_size_mb(url):
     except:
         return 0
 
+# === 关键修复：定义回调函数 ===
+def reset_callback():
+    """在按钮点击的瞬间执行，早于页面重绘"""
+    # 1. 清空表格勾选
+    if 'found_files' in st.session_state:
+        for f in st.session_state['found_files']:
+            f['下载?'] = False
+    # 2. 安全重置输入框数字
+    st.session_state.batch_start = 1
+    st.session_state.batch_end = 1
+
 # --- 主界面 ---
 st.title("🕵️ OSINT 云端批量下载器")
 
@@ -66,7 +77,6 @@ if 'found_files' not in st.session_state: st.session_state['found_files'] = []
 # --- Step 1 ---
 st.markdown('<div class="step-header">Step 1. 扫描文件列表</div>', unsafe_allow_html=True)
 
-# 这里的对齐也顺手优化一下
 col_input, col_btn = st.columns([3, 1], vertical_alignment="bottom")
 with col_input:
     target_url = st.text_input("URL", placeholder="输入网址...", label_visibility="collapsed")
@@ -120,12 +130,12 @@ if st.session_state['found_files']:
     st.markdown('<div class="compact-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="step-header">Step 2. 选择与下载</div>', unsafe_allow_html=True)
     
-    # === 智能选择器 (像素级对齐版) ===
+    # === 智能选择器 ===
     with st.container():
+        # 确保 session state 初始化
         if 'batch_start' not in st.session_state: st.session_state.batch_start = 1
         if 'batch_end' not in st.session_state: st.session_state.batch_end = min(len(st.session_state['found_files']), 30)
 
-        # 关键修改：增加 vertical_alignment="bottom"
         c1, c2, c3, c4 = st.columns([1, 1, 1.5, 3], vertical_alignment="bottom")
         
         with c1: 
@@ -134,20 +144,18 @@ if st.session_state['found_files']:
             end_id = st.number_input("结束 ID", min_value=1, key="batch_end")
             
         with c3:
-            if st.button("✅ 仅选中此范围", help="这会取消其他勾选，只选中当前范围"):
+            if st.button("✅ 仅选中此范围", help="取消其他，只选当前"):
                 for f in st.session_state['found_files']:
                     if start_id <= f['序号'] <= end_id:
                         f['下载?'] = True
                     else:
                         f['下载?'] = False
-                st.toast(f"已选中 {start_id}-{end_id} (旧选择已清除)", icon="⚡")
+                st.toast(f"已选中 {start_id}-{end_id}", icon="⚡")
 
         with c4:
-             if st.button("🗑️ 重置所有"):
-                 for f in st.session_state['found_files']: f['下载?'] = False
-                 st.session_state.batch_start = 1
-                 st.session_state.batch_end = 1
-                 st.rerun()
+             # === 核心修改：使用 on_click 回调 ===
+             # 这样就在页面重新加载前完成了数据清理，不会报错
+             st.button("🗑️ 重置所有", on_click=reset_callback)
 
     # 表格
     df = pd.DataFrame(st.session_state['found_files'])
