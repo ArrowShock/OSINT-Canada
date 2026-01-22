@@ -49,61 +49,50 @@ def get_file_size_mb(url):
     except:
         return 0
 
-# === 核心回调函数群 (解决报错的关键) ===
-
-def sync_from_table():
-    """当表格被手动修改时，反向更新输入框"""
-    # 1. 获取表格的修改记录
-    edited_rows = st.session_state.editor.get("edited_rows", {})
-    
-    # 2. 将修改应用到源数据 (Source of Truth)
-    for idx, changes in edited_rows.items():
-        if "下载?" in changes:
-            # 注意：idx 是行号，对应 found_files 的索引
-            st.session_state['found_files'][int(idx)]['下载?'] = changes["下载?"]
-    
-    # 3. 计算新的选中范围，并更新输入框
-    # (因为是在回调中更新，下次页面渲染时输入框就会自动变，不会报错)
-    selected_indices = [f['序号'] for f in st.session_state['found_files'] if f['下载?']]
-    if selected_indices:
-        st.session_state.batch_start = int(min(selected_indices))
-        st.session_state.batch_end = int(max(selected_indices))
+# --- 核心逻辑函数 ---
+def update_source_data(files):
+    """更新源数据并缓存 DataFrame，防止不必要的重绘"""
+    st.session_state['found_files'] = files
+    # 关键：生成固定的 DataFrame 对象，除非显式更新，否则不变
+    st.session_state['cached_df'] = pd.DataFrame(files)
 
 def apply_range_selection():
-    """当点击'仅选中此范围'按钮时"""
+    """按钮回调：更新范围"""
     start = st.session_state.batch_start
     end = st.session_state.batch_end
     
-    # 更新源数据
+    # 只有点击按钮时，我们才修改源数据
     for f in st.session_state['found_files']:
         if start <= f['序号'] <= end:
             f['下载?'] = True
         else:
             f['下载?'] = False
-            
-    # 重要：为了防止冲突，这里不强制清空 editor 状态，
-    # 而是依赖页面重绘时 data_editor 读取最新的 found_files
+    
+    # 更新缓存
+    update_source_data(st.session_state['found_files'])
 
 def reset_all():
-    """重置所有"""
+    """按钮回调：重置"""
     for f in st.session_state['found_files']:
         f['下载?'] = False
     st.session_state.batch_start = 1
     st.session_state.batch_end = 1
+    update_source_data(st.session_state['found_files'])
 
 # --- 主界面 ---
 st.title("🕵️ OSINT 云端批量下载器")
 
 st.markdown("""
     <div style="margin-bottom: 10px;">
-        <span class="feature-tag">🛡️ 智能防崩溃 (自动跳过大文件)</span>
-        <span class="feature-tag">📂 支持多种格式</span>
-        <span class="feature-tag">🔄 双向同步 (无报错版)</span>
+        <span class="feature-tag">🛡️ 智能防崩溃</span>
+        <span class="feature-tag">🔄 双向同步</span>
+        <span class="feature-tag">⚓ 滚动条防跳动版</span>
     </div>
     <div class="compact-divider"></div> 
 """, unsafe_allow_html=True)
 
 if 'found_files' not in st.session_state: st.session_state['found_files'] = []
+if 'cached_df' not in st.session_state: st.session_state['cached_df'] = pd.DataFrame()
 
 # --- Step 1 ---
 st.markdown('<div class="step-header">Step 1. 扫描文件列表</div>', unsafe_allow_html=True)
@@ -150,14 +139,14 @@ if start_scan:
                             "URL": full_url
                         })
                 
-                st.session_state['found_files'] = files
+                update_source_data(files)
                 st.toast(f"扫描完成！发现 {len(files)} 个文件。", icon="✅")
                 
         except Exception as e:
             st.error(f"扫描失败: {e}")
 
 # --- Step 2 ---
-if st.session_state['found_files']:
+if not st.session_state['cached_df'].empty:
     st.markdown('<div class="compact-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="step-header">Step 2. 选择与下载</div>', unsafe_allow_html=True)
     
@@ -174,19 +163,17 @@ if st.session_state['found_files']:
             st.number_input("结束 ID", min_value=1, key="batch_end")
             
         with c3:
-            # 绑定回调：点击按钮时执行 apply_range_selection
             st.button("✅ 仅选中此范围", on_click=apply_range_selection, help="取消其他，只选当前")
 
         with c4:
-             # 绑定回调：点击按钮时执行 reset_all
              st.button("🗑️ 重置所有", on_click=reset_all)
 
-    # === 表格区域 ===
-    df = pd.DataFrame(st.session_state['found_files'])
+    # === 表格区域 (防跳动核心) ===
+    # 我们不再在每次刷新时生成新的 DataFrame，而是使用 session_state 中的缓存
+    # 这样 data_editor 会认为数据源没变，从而尽可能保持滚动位置
     
-    # 核心修改：绑定 on_change 回调
     edited_df = st.data_editor(
-        df,
+        st.session_state['cached_df'], # <--- 使用固定缓存
         column_config={
             "下载?": st.column_config.CheckboxColumn("选?", width="small"),
             "序号": st.column_config.NumberColumn("No.", width="small", format="%d"),
@@ -196,13 +183,29 @@ if st.session_state['found_files']:
         hide_index=True,
         use_container_width=True,
         height=400,
-        key="editor",              # 必须设置 key
-        on_change=sync_from_table  # <--- 关键：所有修改都在回调中处理
+        key="editor" 
+        # 注意：这里去掉了 on_change 回调，防止手动勾选时因为数据源更新导致的跳动
     )
     
+    # === 同步逻辑 (Manual Sync) ===
+    # 虽然去掉了回调，但我们依然需要读取表格的最新状态来更新输入框
+    # 我们在主流程里计算，如果发现输入框需要更新，再触发 rerun
+    
+    selected_indices = edited_df[edited_df["下载?"] == True]["序号"].tolist()
+    
+    if selected_indices:
+        real_min = int(min(selected_indices))
+        real_max = int(max(selected_indices))
+        
+        # 只有当数字真的需要变的时候，才触发刷新
+        if real_min != st.session_state.batch_start or real_max != st.session_state.batch_end:
+            st.session_state.batch_start = real_min
+            st.session_state.batch_end = real_max
+            st.rerun() 
+
     # --- 下载区域 ---
-    # 直接从 session state 读取最新状态 (因为回调已经更新了它)
-    selected_rows = [f for f in st.session_state['found_files'] if f['下载?']]
+    # 下载时直接使用 edited_df，它是用户当前看到的最新状态（包含手动勾选）
+    selected_rows = edited_df[edited_df["下载?"] == True]
     count = len(selected_rows)
     
     st.info(f"当前选中: {count} 个文件")
@@ -217,11 +220,12 @@ if st.session_state['found_files']:
             status_text = st.empty()
             error_log = []
             
-            total = len(selected_rows)
+            download_list = selected_rows.to_dict('records')
+            total = len(download_list)
             success_count = 0
             
             with zipfile.ZipFile(zip_buffer, "w") as zf:
-                for i, item in enumerate(selected_rows):
+                for i, item in enumerate(download_list):
                     try:
                         file_mb = get_file_size_mb(item['URL'])
                         
