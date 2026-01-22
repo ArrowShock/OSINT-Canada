@@ -49,14 +49,11 @@ def get_file_size_mb(url):
     except:
         return 0
 
-# === 关键修复：定义回调函数 ===
+# 回调：重置逻辑
 def reset_callback():
-    """在按钮点击的瞬间执行，早于页面重绘"""
-    # 1. 清空表格勾选
     if 'found_files' in st.session_state:
         for f in st.session_state['found_files']:
             f['下载?'] = False
-    # 2. 安全重置输入框数字
     st.session_state.batch_start = 1
     st.session_state.batch_end = 1
 
@@ -67,7 +64,7 @@ st.markdown("""
     <div style="margin-bottom: 10px;">
         <span class="feature-tag">🛡️ 智能防崩溃 (自动跳过大文件)</span>
         <span class="feature-tag">📂 支持多种格式</span>
-        <span class="feature-tag">🔢 ID 智能区间</span>
+        <span class="feature-tag">🔄 双向同步选择</span>
     </div>
     <div class="compact-divider"></div> 
 """, unsafe_allow_html=True)
@@ -153,12 +150,12 @@ if st.session_state['found_files']:
                 st.toast(f"已选中 {start_id}-{end_id}", icon="⚡")
 
         with c4:
-             # === 核心修改：使用 on_click 回调 ===
-             # 这样就在页面重新加载前完成了数据清理，不会报错
              st.button("🗑️ 重置所有", on_click=reset_callback)
 
-    # 表格
+    # === 表格区域 ===
     df = pd.DataFrame(st.session_state['found_files'])
+    
+    # 核心修改：接收表格的即时修改
     edited_df = st.data_editor(
         df,
         column_config={
@@ -173,7 +170,25 @@ if st.session_state['found_files']:
         key="editor"
     )
     
-    selected_rows = edited_df[edited_df["下载?"] == True]
+    # --- 🔄 双向同步逻辑 (Magic Happens Here) ---
+    # 1. 立即把表格的手动修改存回 Session State
+    st.session_state['found_files'] = edited_df.to_dict('records')
+    
+    # 2. 检查是否有选中项，并反向更新输入框
+    selected_indices = [f['序号'] for f in st.session_state['found_files'] if f['下载?']]
+    
+    if selected_indices:
+        real_min = min(selected_indices)
+        real_max = max(selected_indices)
+        
+        # 3. 如果发现输入框的数字和实际勾选的不一样，强制刷新输入框
+        if real_min != st.session_state.batch_start or real_max != st.session_state.batch_end:
+            st.session_state.batch_start = int(real_min)
+            st.session_state.batch_end = int(real_max)
+            st.rerun() # 🚀 触发刷新，让您看到输入框数字自动变了！
+
+    # --- 下载区域 ---
+    selected_rows = [f for f in st.session_state['found_files'] if f['下载?']]
     count = len(selected_rows)
     
     st.info(f"当前选中: {count} 个文件")
@@ -188,12 +203,11 @@ if st.session_state['found_files']:
             status_text = st.empty()
             error_log = []
             
-            download_list = selected_rows.to_dict('records')
-            total = len(download_list)
+            total = len(selected_rows)
             success_count = 0
             
             with zipfile.ZipFile(zip_buffer, "w") as zf:
-                for i, item in enumerate(download_list):
+                for i, item in enumerate(selected_rows):
                     try:
                         file_mb = get_file_size_mb(item['URL'])
                         
