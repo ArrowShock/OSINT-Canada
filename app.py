@@ -28,8 +28,6 @@ st.markdown("""
         background-color: #f0f2f6; color: #444; font-size: 0.8em; 
         margin-right: 6px; border: 1px solid #ddd;
     }
-    /* 优化输入框旁边的按钮对齐 */
-    div[data-testid="column"] { align-self: flex-end; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -68,7 +66,8 @@ if 'found_files' not in st.session_state: st.session_state['found_files'] = []
 # --- Step 1 ---
 st.markdown('<div class="step-header">Step 1. 扫描文件列表</div>', unsafe_allow_html=True)
 
-col_input, col_btn = st.columns([3, 1])
+# 这里的对齐也顺手优化一下
+col_input, col_btn = st.columns([3, 1], vertical_alignment="bottom")
 with col_input:
     target_url = st.text_input("URL", placeholder="输入网址...", label_visibility="collapsed")
 with col_btn:
@@ -121,25 +120,22 @@ if st.session_state['found_files']:
     st.markdown('<div class="compact-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="step-header">Step 2. 选择与下载</div>', unsafe_allow_html=True)
     
-    # === 智能选择器 (优化版) ===
+    # === 智能选择器 (像素级对齐版) ===
     with st.container():
-        # 初始化 session state 中的输入框值（如果不存在）
         if 'batch_start' not in st.session_state: st.session_state.batch_start = 1
         if 'batch_end' not in st.session_state: st.session_state.batch_end = min(len(st.session_state['found_files']), 30)
 
-        c1, c2, c3, c4 = st.columns([1, 1, 1.5, 3])
+        # 关键修改：增加 vertical_alignment="bottom"
+        c1, c2, c3, c4 = st.columns([1, 1, 1.5, 3], vertical_alignment="bottom")
         
         with c1: 
-            # 绑定 key 到 session state，实现重置功能
             start_id = st.number_input("起始 ID", min_value=1, key="batch_start")
         with c2: 
             end_id = st.number_input("结束 ID", min_value=1, key="batch_end")
             
         with c3:
-            # 按钮逻辑优化：覆盖式选择
             if st.button("✅ 仅选中此范围", help="这会取消其他勾选，只选中当前范围"):
                 for f in st.session_state['found_files']:
-                    # 关键逻辑：如果在范围内则 True，否则 False (实现覆盖)
                     if start_id <= f['序号'] <= end_id:
                         f['下载?'] = True
                     else:
@@ -147,14 +143,10 @@ if st.session_state['found_files']:
                 st.toast(f"已选中 {start_id}-{end_id} (旧选择已清除)", icon="⚡")
 
         with c4:
-             # 重置逻辑优化：同时清空勾选 + 重置数字
              if st.button("🗑️ 重置所有"):
-                 # 1. 清空表格勾选
                  for f in st.session_state['found_files']: f['下载?'] = False
-                 # 2. 重置输入框数字
                  st.session_state.batch_start = 1
                  st.session_state.batch_end = 1
-                 # 3. 强制刷新页面以显示变化
                  st.rerun()
 
     # 表格
